@@ -40,7 +40,7 @@ class TimeParser {
     ]
     
     // Parse time from string and convert to local timezone
-    func parseAndConvertTime(from text: String) -> (String, String)? {
+    func parseAndConvertTime(from text: String, targetTimezone: TimeZone) -> (String, String)? {
         print("Parsing text: \(text)")
         
         for (index, pattern) in timePatterns.enumerated() {
@@ -73,7 +73,7 @@ class TimeParser {
                     }
                     
                     if components.count >= 3 {
-                        if let result = processTimeComponents(components, patternIndex: index) {
+                        if let result = processTimeComponents(components, patternIndex: index, targetTimezone: targetTimezone) {
                             return result
                         }
                     }
@@ -84,7 +84,7 @@ class TimeParser {
         return nil
     }
     
-    private func processTimeComponents(_ components: [String], patternIndex: Int) -> (String, String)? {
+    private func processTimeComponents(_ components: [String], patternIndex: Int, targetTimezone: TimeZone) -> (String, String)? {
         print("Processing components: \(components) from pattern \(patternIndex)")
         
         // Different patterns will have different component arrangements
@@ -194,16 +194,103 @@ class TimeParser {
         let originalFormatter = DateFormatter()
         originalFormatter.dateFormat = "h:mm a"
         originalFormatter.timeZone = sourceTimeZone
-        let originalTimeString = "\(originalFormatter.string(from: sourceDate)) \(timezoneString)"
+        let originalTimeString = originalFormatter.string(from: sourceDate)
         
-        // Format the converted time
-        let localFormatter = DateFormatter()
-        localFormatter.dateFormat = "h:mm a z"
-        localFormatter.timeZone = TimeZone.current
-        let convertedTimeString = localFormatter.string(from: sourceDate)
+        // Format the converted time using the target timezone
+        let targetFormatter = DateFormatter()
+        targetFormatter.dateFormat = "h:mm a"
+        targetFormatter.timeZone = targetTimezone
+        
+        // Check if the day has changed by comparing dates in their respective timezones
+        var sourceCalendarForDay = Calendar.current
+        sourceCalendarForDay.timeZone = sourceTimeZone
+        
+        var targetCalendarForDay = Calendar.current
+        targetCalendarForDay.timeZone = targetTimezone
+        
+        let sourceComponents = sourceCalendarForDay.dateComponents([.year, .month, .day], from: sourceDate)
+        let targetComponents = targetCalendarForDay.dateComponents([.year, .month, .day], from: sourceDate)
+        
+        print("Source components: \(sourceComponents)")
+        print("Target components: \(targetComponents)")
+        
+        var dayIndicator = ""
+        if let sourceDay = sourceComponents.day, let targetDay = targetComponents.day,
+           let sourceMonth = sourceComponents.month, let targetMonth = targetComponents.month {
+            // Check if we've crossed a month boundary
+            if sourceMonth != targetMonth {
+                if sourceMonth < targetMonth || (sourceMonth == 12 && targetMonth == 1) {
+                    dayIndicator = " +1"
+                } else {
+                    dayIndicator = " -1"
+                }
+            } else if sourceDay != targetDay {
+                if sourceDay < targetDay {
+                    dayIndicator = " +1"
+                } else {
+                    dayIndicator = " -1"
+                }
+            }
+        }
+        
+        let convertedTimeString = "\(targetFormatter.string(from: sourceDate))\(dayIndicator)"
+        print("Day indicator: '\(dayIndicator)'")
         
         print("Original: \(originalTimeString), Converted: \(convertedTimeString)")
         
         return (originalTimeString, convertedTimeString)
+    }
+    
+    func detectTimezone(from timeString: String) -> TimeZone? {
+        // Dictionary of common timezone abbreviations
+        let timezoneAbbreviations = [
+            "EST": -5 * 3600,
+            "EDT": -4 * 3600,
+            "CST": -6 * 3600,
+            "CDT": -5 * 3600,
+            "MST": -7 * 3600,
+            "MDT": -6 * 3600,
+            "PST": -8 * 3600,
+            "PDT": -7 * 3600,
+            "GMT": 0,
+            "UTC": 0
+        ]
+        
+        // Convert to lowercase for case-insensitive comparison
+        let lowercasedTimeString = timeString.lowercased()
+        
+        // Check for timezone abbreviations
+        for (abbreviation, offset) in timezoneAbbreviations {
+            if lowercasedTimeString.contains(abbreviation.lowercased()) {
+                print("Detected timezone abbreviation: \(abbreviation)")
+                return TimeZone(secondsFromGMT: offset)
+            }
+        }
+        
+        // Fallback to offset detection (existing code)
+        let patterns = [
+            #"UTC([+-]\d{1,2}):?(\d{2})?"#,
+            #"GMT([+-]\d{1,2}):?(\d{2})?"#,
+            #"([+-]\d{1,2}):?(\d{2})"#
+        ]
+        
+        for pattern in patterns {
+            if let regex = try? NSRegularExpression(pattern: pattern),
+               let match = regex.firstMatch(in: timeString, range: NSRange(timeString.startIndex..., in: timeString)) {
+                
+                let hourRange = Range(match.range(at: 1), in: timeString)
+                let minuteRange = Range(match.range(at: 2), in: timeString)
+                
+                if let hourRange = hourRange,
+                   let hours = Int(timeString[hourRange]) {
+                    let minutes = minuteRange.flatMap { Int(timeString[$0]) } ?? 0
+                    let secondsFromGMT = (hours * 3600) + (minutes * 60)
+                    return TimeZone(secondsFromGMT: secondsFromGMT)
+                }
+            }
+        }
+        
+        print("No timezone detected in: \(timeString)")
+        return nil
     }
 } 
